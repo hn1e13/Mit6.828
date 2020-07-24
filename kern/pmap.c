@@ -93,17 +93,22 @@ boot_alloc(uint32_t n)
 	// the first virtual address that the linker did *not* assign
 	// to any kernel code or global variables.
 	if (!nextfree) {
+		//这个end很关键，可以快速找到链接器未分配给任何代码和全局变量的第一个虚拟地址
 		extern char end[];
 		nextfree = ROUNDUP((char *) end, PGSIZE);
 	}
-
+	result = nextfree;
+	nextfree=ROUNDUP(nextfree+n, PGSIZE)
+	if((uint32_t)nextfree-KERNBASE>npages*PGSIZE)
+		panic("Out of space!!!\n");	
+	//ROUNDUP函数定义在types.h中，用来获取第一个参数关于4096倍数的最大的一个数值。
 	// Allocate a chunk large enough to hold 'n' bytes, then update
 	// nextfree.  Make sure nextfree is kept aligned
 	// to a multiple of PGSIZE.
 	//
 	// LAB 2: Your code here.
 
-	return NULL;
+	return result;
 }
 
 // Set up a two-level page table:
@@ -148,8 +153,8 @@ mem_init(void)
 	// array.  'npages' is the number of physical pages in memory.  Use memset
 	// to initialize all fields of each struct PageInfo to 0.
 	// Your code goes here:
-
-
+	pages = (struct  PageInfo *) boot_alloc(npages*sizeof(struct PageInfo));
+	memset(pages, 0, npages*sizeof(struct PageInfo));
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
 	// up the list of free physical pages. Once we've done so, all further
@@ -251,12 +256,23 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-	size_t i;
-	for (i = 0; i < npages; i++) {
+	size_t i=0;
+	pages[i++].pp_ref=1;	
+	for (; i < npages_basemem; i++) {
 		pages[i].pp_ref = 0;
 		pages[i].pp_link = page_free_list;
 		page_free_list = &pages[i];
 	}
+	for (; i < EXTPHYSMEM/PGSIZE; i++) pages[i].pp_ref=1;
+	physaddr_t first_free_addr = PADDR((size_t)boot_alloc(0));
+	size_t first_free_page = first_free_addr/PGSIZE;
+	for (; i < first_free_page; i++) pages[i].pp_ref=1;
+	for (; i < npages; i++){
+		pages[i].pp_ref = 0;
+		pages[i].pp_link = page_free_list;
+		page_free_list = &pages[i];
+	}
+	
 }
 
 //
@@ -270,11 +286,19 @@ page_init(void)
 //
 // Returns NULL if out of free memory.
 //
-// Hint: use page2kva and memset
+// Hint: use page2kva（输入一个物理地址用来返回一个虚拟地址） and memset
 struct PageInfo *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
+	if(page_free_list){
+		Struct PageInfo * be_alloced;
+		be_alloced = page_free_list;
+		page_free_list = page_free_list.pp_link;
+		be_alloced.pp_link=NULL;
+		if (alloc_flags & ALLOC_ZERO)
+			memset(page2kva(be_alloced), 0, PGSIZE);		
+	}else return NULL;
 	return 0;
 }
 
@@ -288,6 +312,12 @@ page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
+	if(pp.pp_ref!=0)
+		panic("something wrong in page_free");
+	pp.pp_link=page_free_list;
+	pp.pp_ref=0;
+	page_free_list=pp;
+	
 }
 
 //
