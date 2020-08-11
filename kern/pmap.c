@@ -98,7 +98,7 @@ boot_alloc(uint32_t n)
 		nextfree = ROUNDUP((char *) end, PGSIZE);
 	}
 	result = nextfree;
-	nextfree=ROUNDUP(nextfree+n, PGSIZE)
+	nextfree=ROUNDUP(nextfree+n, PGSIZE);
 	if((uint32_t)nextfree-KERNBASE>npages*PGSIZE)
 		panic("Out of space!!!\n");	
 	//ROUNDUP函数定义在types.h中，用来获取第一个参数关于4096倍数的最大的一个数值。
@@ -130,7 +130,7 @@ mem_init(void)
 	i386_detect_memory();
 
 	// Remove this line when you're ready to test this function.
-	panic("mem_init: This function is not finished\n");
+	//panic("mem_init: This function is not finished\n");
 
 	//////////////////////////////////////////////////////////////////////
 	// create initial page directory.
@@ -264,7 +264,7 @@ page_init(void)
 		page_free_list = &pages[i];
 	}
 	for (; i < EXTPHYSMEM/PGSIZE; i++) pages[i].pp_ref=1;
-	physaddr_t first_free_addr = PADDR((size_t)boot_alloc(0));
+	physaddr_t first_free_addr = PADDR(boot_alloc(0));
 	size_t first_free_page = first_free_addr/PGSIZE;
 	for (; i < first_free_page; i++) pages[i].pp_ref=1;
 	for (; i < npages; i++){
@@ -291,15 +291,16 @@ struct PageInfo *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
+	struct PageInfo * be_alloced;
 	if(page_free_list){
-		Struct PageInfo * be_alloced;
+		
 		be_alloced = page_free_list;
-		page_free_list = page_free_list.pp_link;
-		be_alloced.pp_link=NULL;
+		page_free_list = page_free_list->pp_link;
+		be_alloced->pp_link=NULL;
 		if (alloc_flags & ALLOC_ZERO)
 			memset(page2kva(be_alloced), 0, PGSIZE);		
 	}else return NULL;
-	return 0;
+	return be_alloced;
 }
 
 //
@@ -312,10 +313,10 @@ page_free(struct PageInfo *pp)
 	// Fill this function in
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
-	if(pp.pp_ref!=0)
+	if(pp->pp_ref!=0)
 		panic("something wrong in page_free");
-	pp.pp_link=page_free_list;
-	pp.pp_ref=0;
+	pp->pp_link=page_free_list;
+	pp->pp_ref=0;
 	page_free_list=pp;
 	
 }
@@ -357,7 +358,25 @@ pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
 	// Fill this function in
-	return NULL;
+	uint32_t dir_index = PDX(va); //this is dir index
+	//unsigned int dir_index = PDX(va); //this is dir index
+	uint32_t pg_index = PTX(va); //this is page index
+	//unsigned int pg_index = PTX(va); //this is page index
+	pde_t * target_pde = pgdir + dir_index; //we got the entry of the target dir entry
+	struct PageInfo * newpage = NULL; //for missing target dir entry
+	pte_t * target_pte = NULL; 
+
+	if(!(*target_pde&PTE_P)){
+		if(create){
+			newpage = page_alloc(1);
+			if(newpage==NULL)	
+				return NULL;
+			newpage->pp_ref++;
+			*target_pde = (page2pa(newpage)|PTE_P|PTE_W|PTE_U);
+		}else return NULL;
+	}
+	target_pte = KADDR(PTE_ADDR(*target_pde));
+	return &target_pte[pg_index];
 }
 
 //
@@ -374,6 +393,18 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 static void
 boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm)
 {
+	pte_t * pg_entry = NULL;
+	size_t entry_size = 0;
+	//int entry_size = 0;
+	for(;entry_size<size;entry_size+=PGSIZE){
+		pg_entry=pgdir_walk(pgdir, (void *)va, 1);
+		*pg_entry=(pa|perm|PTE_P);
+
+		va+=PGSIZE;
+		pa+=PGSIZE;
+	}
+
+	return ;
 	// Fill this function in
 }
 
@@ -406,6 +437,19 @@ int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
 	// Fill this function in
+	pte_t * target_pte = NULL;
+	target_pte = pgdir_walk(pgdir, va, 1);
+	if(target_pte==NULL) return -E_NO_MEM;
+
+	pp->pp_ref++;
+	if((*target_pte)&PTE_P){ // only the address can be &
+		tlb_invalidate(pgdir, va);
+		page_remove(pgdir, va);
+		
+	}
+	*target_pte = (page2pa(pp)|PTE_P|perm);
+	pgdir[PDX(va)]|=perm;
+
 	return 0;
 }
 
@@ -424,7 +468,17 @@ struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
 	// Fill this function in
-	return NULL;
+	pte_t * target_pte = NULL;
+	target_pte = pgdir_walk(pgdir, va, 0); // the create should be zero as we just LOOKUP
+	struct PageInfo * target_pg = NULL; // dont forget the struct casting
+	if(target_pte==NULL) 
+		return NULL;
+	if(!(*target_pte&PTE_P)) 
+		return NULL; // dont forget to verify if the entry is exist.
+	target_pg = pa2page(PTE_ADDR(*target_pte)); // convert pte to pa
+	if(pte_store!=NULL)
+		*pte_store = target_pte; // *pte_store = target_pte is the same expression
+	return target_pg;
 }
 
 //
@@ -442,9 +496,29 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 // Hint: The TA solution is implemented using page_lookup,
 // 	tlb_invalidate, and page_decref.
 //
+/*
+//
+// Decrement the reference count on a page,
+// freeing it if there are no more refs.
+//
+void
+page_decref(struct PageInfo* pp)
+{
+	if (--pp->pp_ref == 0)
+		page_free(pp);
+}
+*/
 void
 page_remove(pde_t *pgdir, void *va)
 {
+	pte_t * target_pte = NULL;
+	struct PageInfo * target_pg = page_lookup(pgdir, va, &target_pte);
+	if(target_pg==NULL) return ;
+	page_decref(target_pg);
+	tlb_invalidate(pgdir, va);
+	*target_pte=0;
+
+
 	// Fill this function in
 }
 
