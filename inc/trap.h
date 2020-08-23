@@ -43,6 +43,33 @@
 
 #include <inc/types.h>
 
+/*
+#define T_SYSCALL   48		// system call
+#define T_DEFAULT   500		// catchall
+
+#define IRQ_OFFSET	32	// IRQ 0 corresponds to int IRQ_OFFSET
+*/
+
+void divide_handler();
+void debug_handler();
+void nmi_handler();
+void brkpt_handler();
+void oflow_handler();
+void bound_handler();
+void illop_handler();
+void device_handler();
+void dblflt_handler();
+void tss_handler();
+void segnp_handler();
+void stack_handler();
+void gpflt_handler();
+void pgflt_handler();
+void fperr_handler();
+void align_handler();
+void mchk_handler();
+void simderr_handler();
+void syscall_handler();
+
 struct PushRegs {
 	/* registers as pushed by pusha */
 	uint32_t reg_edi;
